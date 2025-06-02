@@ -1,0 +1,32 @@
+version: '3'
+
+services:
+  electrs-junkcoin:
+    image: electrs-junkcoin:latest  # Use your actual image name if different
+    container_name: electrs-junkcoin
+    restart: unless-stopped
+    ports:
+      - "50001:50001"  # Electrum RPC port
+      - "50010:50010"  # HTTP API port
+      - "4224:4224"    # Monitoring port
+    volumes:
+      - ./electrs-data:/electrs  # Persistent storage for Electrs database
+      - /home/sena/.junkcoin:/home/explore/.junkcoin  # Mount your local .junkcoin directory as read-only
+    environment:
+      - DAEMON_RPC_ADDR=host.docker.internal:9771
+      - ELECTRUM_RPC_ADDR=0.0.0.0:50001
+      - HTTP_ADDR=0.0.0.0:50010
+      - MONITORING_ADDR=0.0.0.0:4224
+      - NETWORK=mainnet
+      - DAEMON_DIR=/home/explore/.junkcoin
+      - DB_DIR=/electrs
+      - COOKIE=senasagara:AnakUc1ngs
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # This makes host.docker.internal work on Linux
+    networks:
+      - electrs-network
+
+networks:
+  electrs-network:
+    driver: bridge
