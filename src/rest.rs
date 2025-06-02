@@ -1051,6 +1051,32 @@ fn handle_request(
             &Method::GET,
             Some(script_type @ &"address"),
             Some(script_str),
+            Some(&"utxo-legacy"),
+            None,
+            None,
+        )
+        | (
+            &Method::GET,
+            Some(script_type @ &"scripthash"),
+            Some(script_str),
+            Some(&"utxo-legacy"),
+            None,
+            None,
+        ) => {
+            // Legacy endpoint without pagination for backward compatibility
+            let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
+            let utxos: Vec<UtxoValue> = query
+                .utxo(&script_hash[..])?
+                .into_iter()
+                .map(UtxoValue::from)
+                .collect();
+                
+            json_response(utxos, TTL_SHORT)
+        }
+        (
+            &Method::GET,
+            Some(script_type @ &"address"),
+            Some(script_str),
             Some(&"utxo"),
             None,
             None,
@@ -1068,18 +1094,6 @@ fn handle_request(
             // Check if pagination parameters are provided
             let has_pagination_params = query_params.contains_key("start_index") || query_params.contains_key("limit");
 
-            // Get all UTXOs
-            let all_utxos = query.utxo(&script_hash[..])?;
-
-            // If no pagination parameters, return all UTXOs (original behavior)
-            if !has_pagination_params {
-                let utxos: Vec<UtxoValue> = all_utxos
-                    .into_iter()
-                    .map(UtxoValue::from)
-                    .collect();
-                return json_response(utxos, TTL_SHORT);
-            }
-
             // Get pagination parameters from query
             let start_index: usize = query_params
                 .get("start_index")
@@ -1091,25 +1105,35 @@ fn handle_request(
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(config.utxos_limit);
 
-            let total_count = all_utxos.len();
+            if has_pagination_params {
+                // Use true database-level pagination
+                let (utxos, total_count) = query.utxo_paginated(&script_hash[..], start_index, limit)?;
+                
+                // Format UTXOs for response
+                let utxos_json: Vec<UtxoValue> = utxos
+                    .into_iter()
+                    .map(UtxoValue::from)
+                    .collect();
 
-            // Apply pagination
-            let utxos: Vec<UtxoValue> = all_utxos
-                .into_iter()
-                .skip(start_index)
-                .take(limit)
-                .map(UtxoValue::from)
-                .collect();
-
-            // Return with pagination metadata
-            let response = json!({
-                "utxos": utxos,
-                "total": total_count,
-                "start_index": start_index,
-                "limit": limit
-            });
-
-            json_response(response, TTL_SHORT)
+                // Return with pagination metadata
+                let response = json!({
+                    "utxos": utxos_json,
+                    "total": total_count,
+                    "start_index": start_index,
+                    "limit": limit
+                });
+                
+                json_response(response, TTL_SHORT)
+            } else {
+                // For backward compatibility, return all UTXOs without pagination metadata
+                let utxos: Vec<UtxoValue> = query
+                    .utxo(&script_hash[..])?
+                    .into_iter()
+                    .map(UtxoValue::from)
+                    .collect();
+                    
+                json_response(utxos, TTL_SHORT)
+            }
         }
         (&Method::GET, Some(&"address-prefix"), Some(prefix), None, None, None) => {
             if !config.address_search {

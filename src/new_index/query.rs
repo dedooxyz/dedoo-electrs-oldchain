@@ -87,6 +87,33 @@ impl Query {
         utxos.extend(mempool.utxo(scripthash));
         Ok(utxos)
     }
+    
+    pub fn utxo_paginated(&self, scripthash: &[u8], start_index: usize, limit: usize) -> Result<(Vec<Utxo>, usize)> {
+        // Get paginated UTXOs from the chain with the total count
+        let (mut chain_utxos, total_chain_count) = self.chain.utxo_paginated(scripthash, start_index, limit)?;
+        
+        // Get mempool UTXOs
+        let mempool = self.mempool();
+        
+        // Remove chain UTXOs that are spent in the mempool
+        chain_utxos.retain(|utxo| !mempool.has_spend(&OutPoint::from(utxo)));
+        
+        // Get all mempool UTXOs for this scripthash
+        let mempool_utxos = mempool.utxo(scripthash);
+        
+        // Calculate the total count (chain + mempool)
+        let total_count = total_chain_count + mempool_utxos.len();
+        
+        // If we have fewer chain UTXOs than the limit after filtering, add some mempool UTXOs
+        if chain_utxos.len() < limit {
+            let remaining = limit - chain_utxos.len();
+            
+            // Add mempool UTXOs up to the remaining limit
+            chain_utxos.extend(mempool_utxos.into_iter().take(remaining));
+        }
+        
+        Ok((chain_utxos, total_count))
+    }
 
     pub fn history_txids(&self, scripthash: &[u8], limit: usize) -> Vec<(Txid, Option<BlockId>)> {
         let confirmed_txids = self.chain.history_txids(scripthash, limit);

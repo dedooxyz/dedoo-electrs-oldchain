@@ -583,6 +583,109 @@ impl ChainQuery {
             .collect())
     }
 
+    pub fn count_utxos(&self, scripthash: &[u8]) -> Result<usize> {
+        let cache: Option<(UtxoMap, usize)> = self
+            .store
+            .cache_db
+            .get(&UtxoCacheRow::key(scripthash))
+            .map(|c| bincode::deserialize_little(&c).unwrap())
+            .and_then(|(utxos_cache, blockhash)| {
+                self.height_by_hash(&blockhash)
+                    .map(|height| (utxos_cache, height))
+            })
+            .map(|(utxos_cache, height)| (from_utxo_cache(utxos_cache, self), height));
+
+        // If we have a cache, count the UTXOs in it
+        if let Some((cached_utxos, blockheight)) = cache {
+            // Get any new UTXOs since the cached block height
+            let (delta_utxos, _, _) = self.utxo_delta(scripthash, HashMap::new(), blockheight + 1, usize::MAX)?;
+            // Return the total count (cached + new)
+            return Ok(cached_utxos.len() + delta_utxos.len());
+        }
+
+        // If no cache, count all UTXOs from scratch
+        let (all_utxos, _, _) = self.utxo_delta(scripthash, HashMap::new(), 0, usize::MAX)?;
+        Ok(all_utxos.len())
+    }
+
+    pub fn utxo_paginated(&self, scripthash: &[u8], start_index: usize, limit: usize) -> Result<(Vec<Utxo>, usize)> {
+        // Get the total count of UTXOs for this scripthash
+        let total_count = self.count_utxos(scripthash)?;
+        
+        // If there are no UTXOs or start_index is beyond the total, return empty result
+        if total_count == 0 || start_index >= total_count {
+            return Ok((Vec::new(), total_count));
+        }
+        
+        let cache: Option<(UtxoMap, usize)> = self
+            .store
+            .cache_db
+            .get(&UtxoCacheRow::key(scripthash))
+            .map(|c| bincode::deserialize_little(&c).unwrap())
+            .and_then(|(utxos_cache, blockhash)| {
+                self.height_by_hash(&blockhash)
+                    .map(|height| (utxos_cache, height))
+            })
+            .map(|(utxos_cache, height)| (from_utxo_cache(utxos_cache, self), height));
+        let had_cache = cache.is_some();
+
+        // Update UTXO set with new transactions since
+        // We need to get all UTXOs to sort them properly for pagination
+        let (newutxos, lastblock, processed_items) = cache.map_or_else(
+            || self.utxo_delta(scripthash, HashMap::new(), 0, usize::MAX),
+            |(oldutxos, blockheight)| self.utxo_delta(scripthash, oldutxos, blockheight + 1, usize::MAX),
+        )?;
+
+        // Save updated UTXO set to cache
+        if let Some(lastblock) = lastblock {
+            if had_cache || processed_items > MIN_HISTORY_ITEMS_TO_CACHE {
+                self.store.cache_db.write(
+                    vec![UtxoCacheRow::new(scripthash, &newutxos, &lastblock).into_row()],
+                    DBFlush::Enable,
+                );
+            }
+        }
+        
+        // Sort UTXOs by txid and vout for consistent pagination
+        let mut utxo_vec: Vec<(OutPoint, (BlockId, Value))> = newutxos.into_iter().collect();
+        utxo_vec.sort_by(|(a_outpoint, _), (b_outpoint, _)| {
+            let txid_cmp = a_outpoint.txid.cmp(&b_outpoint.txid);
+            if txid_cmp == std::cmp::Ordering::Equal {
+                a_outpoint.vout.cmp(&b_outpoint.vout)
+            } else {
+                txid_cmp
+            }
+        });
+        
+        // Apply pagination
+        let end_index = std::cmp::min(start_index + limit, utxo_vec.len());
+        let paginated_utxos = utxo_vec.drain(start_index..end_index)
+            .map(|(outpoint, (blockid, value))| {
+                // in elements/liquid chains, we have to lookup the txo in order to get its
+                // associated asset. the asset information could be kept in the db history rows
+                // alongside the value to avoid this.
+                #[cfg(feature = "liquid")]
+                let txo = self.lookup_txo(&outpoint).expect("missing utxo");
+
+                Utxo {
+                    txid: outpoint.txid,
+                    vout: outpoint.vout,
+                    value,
+                    confirmed: Some(blockid),
+
+                    #[cfg(feature = "liquid")]
+                    asset: txo.asset,
+                    #[cfg(feature = "liquid")]
+                    nonce: txo.nonce,
+                    #[cfg(feature = "liquid")]
+                    witness: txo.witness,
+                }
+            })
+            .collect();
+        
+        Ok((paginated_utxos, total_count))
+    }
+
     fn utxo_delta(
         &self,
         scripthash: &[u8],
