@@ -686,6 +686,101 @@ impl ChainQuery {
         Ok((paginated_utxos, total_count))
     }
 
+    // New method for cursor-based pagination
+    pub fn utxo_with_cursor(&self, scripthash: &[u8], cursor: Option<(Txid, u32)>, limit: usize) -> Result<(Vec<Utxo>, usize, Option<(Txid, u32)>)> {
+        let _timer = self.start_timer("utxo_with_cursor");
+
+        // get the last known utxo set and the blockhash it was updated for.
+        // invalidates the cache if the block was orphaned.
+        let cache: Option<(UtxoMap, usize)> = self
+            .store
+            .cache_db
+            .get(&UtxoCacheRow::key(scripthash))
+            .map(|c| bincode::deserialize_little(&c).unwrap())
+            .and_then(|(utxos_cache, blockhash)| {
+                self.height_by_hash(&blockhash)
+                    .map(|height| (utxos_cache, height))
+            })
+            .map(|(utxos_cache, height)| (from_utxo_cache(utxos_cache, self), height));
+        
+        // Update UTXO set with new transactions since
+        // We need to get all UTXOs to sort them properly for pagination
+        let (newutxos, lastblock, processed_items) = cache.as_ref().map_or_else(
+            || self.utxo_delta(scripthash, HashMap::new(), 0, usize::MAX),
+            |(oldutxos, blockheight)| self.utxo_delta(scripthash, oldutxos.clone(), blockheight + 1, usize::MAX),
+        )?;
+        
+        // Save updated UTXO set to cache
+        if let Some(lastblock) = lastblock {
+            let had_cache = cache.is_some();
+            if had_cache || processed_items > MIN_HISTORY_ITEMS_TO_CACHE {
+                self.store.cache_db.write(
+                    vec![UtxoCacheRow::new(scripthash, &newutxos, &lastblock).into_row()],
+                    DBFlush::Enable,
+                );
+            }
+        }
+        
+        // Convert to vector and sort for consistent pagination
+        let mut utxo_vec: Vec<(OutPoint, (BlockId, Value))> = newutxos.into_iter().collect();
+        utxo_vec.sort_by(|(a_outpoint, _), (b_outpoint, _)| {
+            a_outpoint.txid.cmp(&b_outpoint.txid).then(a_outpoint.vout.cmp(&b_outpoint.vout))
+        });
+        
+        // Total count for metadata
+        let total_count = utxo_vec.len();
+        
+        // Find position after cursor
+        let start_pos = if let Some((cursor_txid, cursor_vout)) = cursor {
+            utxo_vec.iter().position(|(outpoint, _)| {
+                outpoint.txid > cursor_txid || (outpoint.txid == cursor_txid && outpoint.vout > cursor_vout)
+            }).unwrap_or(utxo_vec.len())
+        } else {
+            0 // Start from beginning if no cursor
+        };
+        
+        // Take one extra item to determine if there are more results
+        let take_count = std::cmp::min(limit + 1, utxo_vec.len() - start_pos);
+        let cursor_utxos: Vec<_> = utxo_vec.drain(start_pos..(start_pos + take_count)).collect();
+        
+        // Determine next cursor
+        let next_cursor = if cursor_utxos.len() > limit {
+            // We have more results, so return a cursor for the next page
+            let (last_outpoint, _) = &cursor_utxos[limit - 1];
+            Some((last_outpoint.txid, last_outpoint.vout))
+        } else {
+            // No more results
+            None
+        };
+        
+        // Format as Utxo objects (excluding the extra item we took for cursor determination)
+        let utxos = cursor_utxos.into_iter()
+            .take(limit)
+            .map(|(outpoint, (blockid, value))| {
+                // in elements/liquid chains, we have to lookup the txo in order to get its
+                // associated asset. the asset information could be kept in the db history rows
+                // alongside the value to avoid this.
+                #[cfg(feature = "liquid")]
+                let txo = self.lookup_txo(&outpoint).expect("missing utxo");
+
+                Utxo {
+                    txid: outpoint.txid,
+                    vout: outpoint.vout,
+                    value,
+                    confirmed: Some(blockid),
+                    #[cfg(feature = "liquid")]
+                    asset: txo.asset,
+                    #[cfg(feature = "liquid")]
+                    nonce: txo.nonce,
+                    #[cfg(feature = "liquid")]
+                    witness: txo.witness,
+                }
+            })
+            .collect();
+            
+        Ok((utxos, total_count, next_cursor))
+    }
+
     fn utxo_delta(
         &self,
         scripthash: &[u8],

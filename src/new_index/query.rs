@@ -114,6 +114,75 @@ impl Query {
         
         Ok((chain_utxos, total_count))
     }
+    
+    pub fn utxo_with_cursor(&self, scripthash: &[u8], cursor: Option<(Txid, u32)>, limit: usize) -> Result<(Vec<Utxo>, usize, Option<(Txid, u32)>)> {
+        // Get UTXOs with cursor from the chain
+        let (mut chain_utxos, total_chain_count, chain_next_cursor) = self.chain.utxo_with_cursor(scripthash, cursor, limit)?;
+        
+        // Handle mempool UTXOs
+        let mempool = self.mempool();
+        
+        // Filter out spent outputs
+        chain_utxos.retain(|utxo| !mempool.has_spend(&OutPoint::from(utxo)));
+        
+        // Get mempool UTXOs
+        let mempool_utxos = mempool.utxo(scripthash);
+        
+        // Calculate total count including mempool UTXOs
+        // Note: This is an approximation since we're not considering spent outputs in the total count
+        let total_count = total_chain_count + mempool_utxos.len();
+        
+        // If we have space left after chain UTXOs and there's no more chain UTXOs, add mempool UTXOs
+        let mut next_cursor = chain_next_cursor;
+        
+        if chain_utxos.len() < limit && next_cursor.is_none() {
+            // We've exhausted chain UTXOs, so we need to add mempool UTXOs
+            // Sort mempool UTXOs by txid and vout for consistent pagination
+            let mut sorted_mempool: Vec<_> = mempool_utxos.into_iter().collect();
+            sorted_mempool.sort_by(|a, b| {
+                a.txid.cmp(&b.txid).then(a.vout.cmp(&b.vout))
+            });
+            
+            // Find position after cursor in mempool UTXOs
+            let mempool_start = if let Some((cursor_txid, cursor_vout)) = cursor {
+                // If we have a cursor, find the position after it in mempool UTXOs
+                sorted_mempool.iter().position(|utxo| {
+                    utxo.txid > cursor_txid || (utxo.txid == cursor_txid && utxo.vout > cursor_vout)
+                }).unwrap_or(0)
+            } else {
+                // No cursor, but we still have chain UTXOs, so skip mempool UTXOs for now
+                if !chain_utxos.is_empty() {
+                    sorted_mempool.len()
+                } else {
+                    0 // No chain UTXOs, start from beginning of mempool
+                }
+            };
+            
+            // Calculate how many mempool UTXOs we can add
+            let remaining_slots = limit - chain_utxos.len();
+            
+            if mempool_start < sorted_mempool.len() {
+                // Take one extra to determine if there are more results
+                let take_count = std::cmp::min(remaining_slots + 1, sorted_mempool.len() - mempool_start);
+                let mempool_page: Vec<_> = sorted_mempool.into_iter().skip(mempool_start).take(take_count).collect();
+                
+                // Determine if we need a next cursor from mempool UTXOs
+                if mempool_page.len() > remaining_slots {
+                    // We have more results, so provide a cursor for the next page
+                    let last_utxo = &mempool_page[remaining_slots - 1];
+                    next_cursor = Some((last_utxo.txid, last_utxo.vout));
+                    
+                    // Add only up to the limit
+                    chain_utxos.extend(mempool_page.into_iter().take(remaining_slots));
+                } else {
+                    // Add all mempool UTXOs we found
+                    chain_utxos.extend(mempool_page);
+                }
+            }
+        }
+        
+        Ok((chain_utxos, total_count, next_cursor))
+    }
 
     pub fn history_txids(&self, scripthash: &[u8], limit: usize) -> Vec<(Txid, Option<BlockId>)> {
         let confirmed_txids = self.chain.history_txids(scripthash, limit);

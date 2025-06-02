@@ -1091,22 +1091,49 @@ fn handle_request(
         ) => {
             let script_hash = to_scripthash(script_type, script_str, config.network_type)?;
 
-            // Check if pagination parameters are provided
+            // Check if cursor parameter is provided (for cursor-based pagination)
+            let has_cursor = query_params.contains_key("cursor");
+            
+            // Check if index-based pagination parameters are provided
             let has_pagination_params = query_params.contains_key("start_index") || query_params.contains_key("limit");
 
             // Get pagination parameters from query
-            let start_index: usize = query_params
-                .get("start_index")
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-
             let limit: usize = query_params
                 .get("limit")
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(config.utxos_limit);
 
-            if has_pagination_params {
-                // Use true database-level pagination
+            if has_cursor {
+                // Use cursor-based pagination
+                let cursor = parse_cursor(query_params.get("cursor").unwrap())?;
+                let (utxos, total_count, next_cursor) = query.utxo_with_cursor(&script_hash[..], cursor, limit)?;
+                
+                // Format UTXOs for response
+                let utxos_json: Vec<UtxoValue> = utxos
+                    .into_iter()
+                    .map(UtxoValue::from)
+                    .collect();
+
+                // Build response with pagination metadata
+                let mut response = json!({
+                    "utxos": utxos_json,
+                    "total": total_count,
+                    "limit": limit
+                });
+                
+                // Add next_cursor if there are more results
+                if let Some((txid, vout)) = next_cursor {
+                    response["next_cursor"] = json!(format!("{:x}:{}", txid, vout));
+                }
+                
+                json_response(response, TTL_SHORT)
+            } else if has_pagination_params {
+                // Use index-based pagination for backward compatibility
+                let start_index: usize = query_params
+                    .get("start_index")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                    
                 let (utxos, total_count) = query.utxo_paginated(&script_hash[..], start_index, limit)?;
                 
                 // Format UTXOs for response
@@ -1784,6 +1811,28 @@ fn address_to_scripthash(addr: &str, network: Network) -> Result<FullHash, HttpE
 
 fn parse_scripthash(scripthash: &str) -> Result<FullHash, HttpError> {
     FullHash::from_hex(scripthash).map_err(|_| HttpError::from("Invalid scripthash".to_string()))
+}
+
+// Parse a cursor string in the format "txid:vout" into a tuple (Txid, u32)
+fn parse_cursor(cursor_str: &str) -> Result<Option<(Txid, u32)>, HttpError> {
+    if cursor_str.is_empty() {
+        return Ok(None);
+    }
+    
+    let parts: Vec<&str> = cursor_str.split(':').collect();
+    if parts.len() != 2 {
+        return Err(HttpError::from("Invalid cursor format, expected 'txid:vout'".to_string()));
+    }
+    
+    let txid = Txid::from_str(parts[0]).map_err(|_| {
+        HttpError::from("Invalid txid in cursor".to_string())
+    })?;
+    
+    let vout = parts[1].parse::<u32>().map_err(|_| {
+        HttpError::from("Invalid vout in cursor".to_string())
+    })?;
+    
+    Ok(Some((txid, vout)))
 }
 
 #[derive(Debug)]
