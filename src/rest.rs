@@ -793,8 +793,11 @@ fn handle_request(
             } else {
                 // Use the standard method for normal addresses
                 let stats = query.stats(&script_hash[..]);
-                let confirmed = stats.0.funded_txo_sum - stats.0.spent_txo_sum;
-                let pending = stats.1.funded_txo_sum - stats.1.spent_txo_sum;
+                // Use saturating_sub to prevent underflow for confirmed balance
+                let confirmed = stats.0.funded_txo_sum.saturating_sub(stats.0.spent_txo_sum);
+                // For pending balance, we need to handle potential negative values
+                let pending = stats.1.funded_txo_sum as i64 - stats.1.spent_txo_sum as i64;
+                let pending = if pending.is_negative() { 0 } else { pending as u64 };
                 (confirmed, pending)
             };
 
