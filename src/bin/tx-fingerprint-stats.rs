@@ -1,4 +1,4 @@
-extern crate electrs;
+extern crate dedoo_electrs;
 
 #[cfg(not(feature = "liquid"))]
 #[macro_use]
@@ -11,7 +11,7 @@ fn main() {
 
     use bitcoin::blockdata::script::ScriptBuf;
     use bitcoin::consensus::encode::deserialize;
-    use electrs::{
+    use dedoo_electrs::{
         chain::Transaction,
         config::Config,
         daemon::Daemon,

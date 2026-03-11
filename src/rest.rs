@@ -508,7 +508,6 @@ fn prepare_txs(
         .collect()
 }
 
-#[tokio::main]
 async fn run_server(config: Arc<Config>, query: Arc<Query>, rx: oneshot::Receiver<()>) {
     let addr = &config.http_addr;
     let socket_file = &config.http_socket_file;
@@ -592,10 +591,19 @@ async fn run_server(config: Arc<Config>, query: Arc<Query>, rx: oneshot::Receive
 pub fn start(config: Arc<Config>, query: Arc<Query>) -> Handle {
     let (tx, rx) = oneshot::channel::<()>();
 
+    let worker_threads = config.http_worker_threads;
+    info!("Starting HTTP server with {} worker threads", worker_threads);
+
     Handle {
         tx,
         thread: thread::spawn(move || {
-            run_server(config, query, rx);
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(worker_threads)
+                .enable_all()
+                .build()
+                .expect("Failed to create tokio runtime for HTTP server");
+            
+            runtime.block_on(run_server(config, query, rx));
         }),
     }
 }

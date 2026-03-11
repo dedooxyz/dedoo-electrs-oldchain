@@ -2,18 +2,19 @@ extern crate error_chain;
 #[macro_use]
 extern crate log;
 
-extern crate electrs;
+extern crate dedoo_electrs;
 
 use error_chain::ChainedError;
 use std::process;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use electrs::{
+use dedoo_electrs::{
     config::Config,
     daemon::Daemon,
     electrum::RPC as ElectrumRPC,
     errors::*,
+    grpc,
     metrics::Metrics,
     new_index::{precache, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
     rest,
@@ -21,8 +22,8 @@ use electrs::{
 };
 
 #[cfg(feature = "liquid")]
-use electrs::elements::AssetRegistry;
-use electrs::metrics::MetricOpts;
+use dedoo_electrs::elements::AssetRegistry;
+use dedoo_electrs::metrics::MetricOpts;
 
 fn fetch_from(config: &Config, store: &Store) -> FetchFrom {
     let mut jsonrpc_import = config.jsonrpc_import;
@@ -111,9 +112,37 @@ fn run_server(config: Arc<Config>) -> Result<()> {
     let rest_server = rest::start(Arc::clone(&config), Arc::clone(&query));
     let electrum_server = ElectrumRPC::start(Arc::clone(&config), Arc::clone(&query), &metrics);
 
+    // Start gRPC server if configured
+    let grpc_server = config.grpc_addr.map(|addr| {
+        info!("Starting gRPC server on {}", addr);
+        
+        // Create shared ranking manager
+        let ranking = std::sync::Arc::new(grpc::RankingManager::new());
+        
+        // Start the gRPC server with the shared ranking manager
+        let grpc_handle = grpc::start_grpc_server(
+            Arc::clone(&config),
+            Arc::clone(&query),
+            addr,
+            Arc::clone(&ranking),
+        );
+        
+        // Start the background ranking indexer
+        info!("Starting background wallet ranking indexer...");
+        let indexer = grpc::RankingIndexer::new(
+            Arc::clone(&store),
+            Arc::clone(&chain),
+            Arc::clone(&ranking),
+            config.network_type,
+        );
+        let _indexer_handle = indexer.spawn();
+        
+        grpc_handle
+    });
+
     let main_loop_count = metrics.gauge(MetricOpts::new(
-        "electrs_main_loop_count",
-        "count of iterations of electrs main loop each 5 seconds or after interrupts",
+        "dedoo_electrs_main_loop_count",
+        "count of iterations of dedoo-electrs main loop each 5 seconds or after interrupts",
     ));
 
     loop {
@@ -123,6 +152,9 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         if let Err(err) = signal.wait(Duration::from_secs(5), true) {
             info!("stopping server: {}", err);
             rest_server.stop();
+            if let Some(grpc) = grpc_server {
+                grpc.stop();
+            }
             // the electrum server is stopped when dropped
             break;
         }

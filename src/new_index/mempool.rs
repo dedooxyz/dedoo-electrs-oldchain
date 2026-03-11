@@ -27,7 +27,6 @@ use crate::util::{extract_tx_prevouts, full_hash, has_prevout, is_spendable, Byt
 use crate::elements::asset;
 
 const RECENT_TXS_SIZE: usize = 10;
-const BACKLOG_STATS_TTL: u64 = 10;
 
 pub struct Mempool {
     chain: Arc<ChainQuery>,
@@ -73,7 +72,7 @@ impl Mempool {
             recent: ArrayDeque::new(),
             backlog_stats: (
                 BacklogStats::default(),
-                Instant::now() - Duration::from_secs(BACKLOG_STATS_TTL),
+                Instant::now() - Duration::from_secs(config.mempool_backlog_stats_ttl),
             ),
             latency: metrics.histogram_vec(
                 HistogramOpts::new("mempool_latency", "Mempool requests latency (in seconds)"),
@@ -541,7 +540,8 @@ impl Mempool {
                 .set(mempool.txstore.len() as f64);
 
             // Update cached backlog stats (if expired)
-            if mempool.backlog_stats.1.elapsed() > Duration::from_secs(BACKLOG_STATS_TTL) {
+            let ttl = mempool.config.mempool_backlog_stats_ttl;
+            if mempool.backlog_stats.1.elapsed() > Duration::from_secs(ttl) {
                 mempool.update_backlog_stats();
             }
         }

@@ -44,7 +44,13 @@ pub enum Network {
 impl Network {
     #[cfg(not(feature = "liquid"))]
     pub fn magic(self) -> u32 {
-        u32::from_le_bytes(BNetwork::from(self).magic().to_bytes())
+        // Junkcoin-specific magic bytes
+        match self {
+            Network::Bitcoin => 0xdbb6c0fb,  // Junkcoin mainnet: fb c0 b6 db
+            Network::Testnet => 0xdcb7c1fc,  // Junkcoin testnet: fc c1 b7 dc
+            Network::Regtest => 0xdab5bffa,  // Junkcoin regtest (same as Litecoin regtest)
+            Network::Signet => 0xdcb7c1fc,   // Use testnet magic for signet
+        }
     }
 
     #[cfg(feature = "liquid")]

@@ -14,7 +14,7 @@ use crate::errors::*;
 #[cfg(feature = "liquid")]
 use bitcoin::Network as BNetwork;
 
-const ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
+const D_ELECTRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -40,6 +40,21 @@ pub struct Config {
     pub electrum_txs_limit: usize,
     pub electrum_banner: String,
     pub electrum_rpc_logging: Option<RpcLogging>,
+    pub db_max_open_files: i32,
+    pub db_write_buffer_size: usize,
+    pub db_compaction_parallelism: i32,
+    pub electrum_max_connections: usize,
+    pub electrum_channel_buffer_size: usize,
+    pub http_worker_threads: usize,
+    pub mempool_backlog_stats_ttl: u64,
+    pub fee_estimates_cache_ttl: u64,
+    pub relay_fee_cache_ttl: u64,
+    pub daemon_connection_pool_size: usize,
+
+    // gRPC server configuration
+    pub grpc_addr: Option<SocketAddr>,
+    pub grpc_tls_cert: Option<PathBuf>,
+    pub grpc_tls_key: Option<PathBuf>,
 
     #[cfg(feature = "liquid")]
     pub parent_network: BNetwork,
@@ -71,7 +86,7 @@ impl Config {
             RpcLogging::options().join(", ")
         );
 
-        let args = App::new("Electrum Rust Server")
+        let args = App::new("dedoo-electrs")
             .version(crate_version!())
             .arg(
                 Arg::with_name("verbosity")
@@ -190,6 +205,81 @@ impl Config {
                 Arg::with_name("electrum_rpc_logging")
                     .long("electrum-rpc-logging")
                     .help(&rpc_logging_help)
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("db_max_open_files")
+                    .long("db-max-open-files")
+                    .help("Maximum number of open files for RocksDB (default: 4096, increase only if you have high ulimit -n)")
+                    .default_value("4096")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("db_write_buffer_size")
+                    .long("db-write-buffer-size")
+                    .help("RocksDB write buffer size in MB (default: 256)")
+                    .default_value("256")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("db_compaction_parallelism")
+                    .long("db-compaction-parallelism")
+                    .help("RocksDB compaction threads (default: 2, increase for faster compaction)")
+                    .default_value("2")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("electrum_max_connections")
+                    .long("electrum-max-connections")
+                    .help("Maximum number of concurrent Electrum client connections (default: 100, 0 = unlimited)")
+                    .default_value("100")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("electrum_channel_buffer_size")
+                    .long("electrum-channel-buffer-size")
+                    .help("Channel buffer size for Electrum client communication (default: 10)")
+                    .default_value("10")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("http_worker_threads")
+                    .long("http-worker-threads")
+                    .help("Number of worker threads for HTTP server (default: 4, uses multi-threaded tokio runtime)")
+                    .default_value("4")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("mempool_backlog_stats_ttl")
+                    .long("mempool-backlog-stats-ttl")
+                    .help("Mempool backlog stats cache TTL in seconds (default: 10, increase to reduce CPU usage)")
+                    .default_value("10")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("fee_estimates_cache_ttl")
+                    .long("fee-estimates-cache-ttl")
+                    .help("Fee estimates cache TTL in seconds (default: 60, increase to reduce RPC calls)")
+                    .default_value("60")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("relay_fee_cache_ttl")
+                    .long("relay-fee-cache-ttl")
+                    .help("Relay fee cache TTL in seconds (default: 60, 0 = cache forever)")
+                    .default_value("60")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("daemon_connection_pool_size")
+                    .long("daemon-connection-pool-size")
+                    .help("Daemon RPC connection pool size (default: 1, increase for better concurrency)")
+                    .default_value("1")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("grpc_addr")
+                    .long("grpc-addr")
+                    .help("gRPC server 'addr:port' for lightwalletd-compatible API (default: disabled, set to enable e.g. '127.0.0.1:9067')")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("grpc_tls_cert")
+                    .long("grpc-tls-cert")
+                    .help("Path to TLS certificate file (PEM format) for gRPC server")
+                    .takes_value(true),
+            ).arg(
+                Arg::with_name("grpc_tls_key")
+                    .long("grpc-tls-key")
+                    .help("Path to TLS private key file (PEM format) for gRPC server")
                     .takes_value(true),
             );
 
@@ -362,7 +452,7 @@ impl Config {
         let cookie = m.value_of("cookie").map(|s| s.to_owned());
 
         let electrum_banner = m.value_of("electrum_banner").map_or_else(
-            || format!("Welcome to electrs-esplora {}", ELECTRS_VERSION),
+            || format!("Welcome to dedoo-electrs {}", D_ELECTRS_VERSION),
             |s| s.into(),
         );
 
@@ -394,6 +484,16 @@ impl Config {
             electrum_rpc_logging: m
                 .value_of("electrum_rpc_logging")
                 .map(|option| RpcLogging::from(option)),
+            db_max_open_files: value_t_or_exit!(m, "db_max_open_files", i32),
+            db_write_buffer_size: value_t_or_exit!(m, "db_write_buffer_size", usize),
+            db_compaction_parallelism: value_t_or_exit!(m, "db_compaction_parallelism", i32),
+            electrum_max_connections: value_t_or_exit!(m, "electrum_max_connections", usize),
+            electrum_channel_buffer_size: value_t_or_exit!(m, "electrum_channel_buffer_size", usize),
+            http_worker_threads: value_t_or_exit!(m, "http_worker_threads", usize),
+            mempool_backlog_stats_ttl: value_t_or_exit!(m, "mempool_backlog_stats_ttl", u64),
+            fee_estimates_cache_ttl: value_t_or_exit!(m, "fee_estimates_cache_ttl", u64),
+            relay_fee_cache_ttl: value_t_or_exit!(m, "relay_fee_cache_ttl", u64),
+            daemon_connection_pool_size: value_t_or_exit!(m, "daemon_connection_pool_size", usize),
             http_addr,
             http_socket_file,
             monitoring_addr,
@@ -403,6 +503,10 @@ impl Config {
             index_unspendables: m.is_present("index_unspendables"),
             cors: m.value_of("cors").map(|s| s.to_string()),
             precache_scripts: m.value_of("precache_scripts").map(|s| s.to_string()),
+
+            grpc_addr: m.value_of("grpc_addr").map(|addr| str_to_socketaddr(addr, "gRPC")),
+            grpc_tls_cert: m.value_of("grpc_tls_cert").map(PathBuf::from),
+            grpc_tls_key: m.value_of("grpc_tls_key").map(PathBuf::from),
 
             #[cfg(feature = "liquid")]
             parent_network,
@@ -461,7 +565,7 @@ pub fn get_network_subdir(network: Network) -> Option<&'static str> {
         #[cfg(not(feature = "liquid"))]
         Network::Bitcoin => None,
         #[cfg(not(feature = "liquid"))]
-        Network::Testnet => Some("testnet3"),
+        Network::Testnet => Some("testnet4"),
         #[cfg(not(feature = "liquid"))]
         Network::Regtest => Some("regtest"),
         #[cfg(not(feature = "liquid"))]

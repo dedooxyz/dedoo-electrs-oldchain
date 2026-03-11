@@ -1,13 +1,13 @@
 [package]
-name = "electrs"
+name = "dedoo-electrs"
 version = "0.4.1"
-authors = ["Roman Zeyde <me@romanzey.de>"]
-description = "An efficient re-implementation of Electrum Server in Rust"
+authors = ["Dedoo Team"]
+description = "Junkcoin blockchain indexer with gRPC lightwalletd API and wallet ranking"
 license = "MIT"
-homepage = "https://github.com/romanz/electrs"
-repository = "https://github.com/romanz/electrs"
-keywords = ["bitcoin", "electrum", "server", "index", "database"]
-documentation = "https://docs.rs/electrs/"
+homepage = "https://github.com/AstroNomically/dedoo-electrs"
+repository = "https://github.com/AstroNomically/dedoo-electrs"
+keywords = ["junkcoin", "electrum", "grpc", "lightwalletd", "blockchain"]
+documentation = "https://github.com/AstroNomically/dedoo-electrs"
 readme = "README.md"
 edition = "2018"
 
@@ -52,10 +52,20 @@ url = "2.2.0"
 hyper = "0.14"
 hyperlocal = "0.8"
 # close to same tokio version as dependent by hyper v0.14 and hyperlocal 0.8 -- things can go awry if they mismatch
-tokio = { version = "1", features = ["sync", "macros"] }
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
+lru = "0.12"
+
+# gRPC dependencies for lightwalletd-style API
+tonic = { version = "0.10", features = ["tls"] }
+prost = "0.12"
+futures = "0.3"
+async-stream = "0.3"
 
 # optional dependencies for electrum-discovery
 electrum-client = { version = "0.8", optional = true }
+
+[build-dependencies]
+tonic-build = "0.10"
 
 
 [dev-dependencies]
@@ -66,9 +76,9 @@ ureq = { version = "2.9", default-features = false, features = [ "json" ] }
 tempfile = "3.10"
 
 [profile.release]
-lto = true
+lto = false
 panic = 'abort'
-codegen-units = 1
+codegen-units = 16
 
 [patch.crates-io.electrum-client]
 git = "https://github.com/Blockstream/rust-electrum-client"

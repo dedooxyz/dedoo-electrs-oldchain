@@ -192,12 +192,15 @@ impl From<&Config> for IndexerConfig {
     }
 }
 
+const TX_CACHE_SIZE: usize = 10_000;
+
 pub struct ChainQuery {
     store: Arc<Store>, // TODO: should be used as read-only
     daemon: Arc<Daemon>,
     light_mode: bool,
     duration: HistogramVec,
     network: Network,
+    tx_cache: RwLock<LruCache<Txid, Transaction>>,
 }
 
 // TODO: &[Block] should be an iterator / a queue.
@@ -358,6 +361,7 @@ impl ChainQuery {
                 HistogramOpts::new("query_duration", "Index query duration (in seconds)"),
                 &["name"],
             ),
+            tx_cache: RwLock::new(LruCache::new(NonZeroUsize::new(TX_CACHE_SIZE).unwrap())),
         }
     }
 
@@ -1024,11 +1028,28 @@ impl ChainQuery {
 
     pub fn lookup_txn(&self, txid: &Txid, blockhash: Option<&BlockHash>) -> Option<Transaction> {
         let _timer = self.start_timer("lookup_txn");
-        self.lookup_raw_txn(txid, blockhash).map(|rawtx| {
+        
+        // Check cache first (only for non-light_mode where we have the tx in db)
+        if !self.light_mode {
+            if let Some(cached) = self.tx_cache.write().unwrap().get(txid) {
+                return Some(cached.clone());
+            }
+        }
+        
+        let result = self.lookup_raw_txn(txid, blockhash).map(|rawtx| {
             let txn: Transaction = deserialize(&rawtx).expect("failed to parse Transaction");
             assert_eq!(*txid, txn.txid());
             txn
-        })
+        });
+        
+        // Insert into cache if found (only for non-light_mode)
+        if !self.light_mode {
+            if let Some(ref txn) = result {
+                self.tx_cache.write().unwrap().put(*txid, txn.clone());
+            }
+        }
+        
+        result
     }
 
     pub fn lookup_raw_txn(&self, txid: &Txid, blockhash: Option<&BlockHash>) -> Option<Bytes> {

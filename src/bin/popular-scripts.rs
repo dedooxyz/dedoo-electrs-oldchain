@@ -1,6 +1,6 @@
-extern crate electrs;
+extern crate dedoo_electrs;
 
-use electrs::{
+use dedoo_electrs::{
     config::Config,
     new_index::{Store, TxHistoryKey},
     util::bincode,

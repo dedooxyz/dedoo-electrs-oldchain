@@ -27,6 +27,7 @@ pub mod config;
 pub mod daemon;
 pub mod electrum;
 pub mod errors;
+pub mod grpc;
 pub mod metrics;
 pub mod new_index;
 pub mod rest;

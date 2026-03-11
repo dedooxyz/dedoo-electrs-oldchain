@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Lines, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use base64::prelude::{Engine, BASE64_STANDARD};
@@ -276,7 +276,42 @@ impl Connection {
     }
 }
 
-struct Counter {
+pub struct ConnectionPool {
+    connections: Vec<Mutex<Connection>>,
+    current: AtomicUsize,
+}
+
+impl ConnectionPool {
+    pub fn new(
+        daemon_rpc_addr: SocketAddr,
+        cookie_getter: Arc<dyn CookieGetter>,
+        signal: Waiter,
+        pool_size: usize,
+    ) -> Result<Self> {
+        let mut connections = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            let conn = Connection::new(daemon_rpc_addr, cookie_getter.clone(), signal.clone())?;
+            connections.push(Mutex::new(conn));
+        }
+        Ok(Self {
+            connections,
+            current: AtomicUsize::new(0),
+        })
+    }
+
+    pub fn get_connection(&self) -> Option<std::sync::MutexGuard<Connection>> {
+        let idx = self.current.fetch_add(1, Ordering::Relaxed) % self.connections.len();
+        self.connections.get(idx).map(|c| c.lock().unwrap())
+    }
+
+    pub fn get_connection_by_index(&self, index: usize) -> Option<std::sync::MutexGuard<Connection>> {
+        self.connections.get(index % self.connections.len()).map(|c| c.lock().unwrap())
+    }
+
+    pub fn len(&self) -> usize {
+        self.connections.len()
+    }
+}
     value: Mutex<u64>,
 }
 

@@ -1,0 +1,302 @@
+// Junkcoin Light Wallet Protocol
+// Based on Zcash's lightwalletd protocol with extensions for wallet ranking
+
+syntax = "proto3";
+package junkcoin.lightwallet;
+
+// ============================================================================
+// Core Block Types
+// ============================================================================
+
+// CompactBlock is a minimal block representation for efficient sync
+message CompactBlock {
+  uint32 protoVersion = 1;   // Protocol version
+  uint64 height = 2;         // Block height
+  bytes hash = 3;            // Block hash (32 bytes)
+  bytes prevHash = 4;        // Previous block hash (32 bytes)
+  uint32 time = 5;           // Block timestamp
+  bytes header = 6;          // Full block header (80 bytes)
+  repeated CompactTx vtx = 7; // Compact transactions
+}
+
+// CompactTx is a minimal transaction representation
+message CompactTx {
+  uint64 index = 1;          // Index within the block
+  bytes hash = 2;            // Transaction hash (32 bytes)
+  uint64 fee = 3;            // Transaction fee in satoshis
+  repeated CompactInput inputs = 4;
+  repeated CompactOutput outputs = 5;
+}
+
+// CompactInput represents a transaction input
+message CompactInput {
+  bytes prevTxHash = 1;      // Previous transaction hash
+  uint32 prevIndex = 2;      // Previous output index
+  uint64 value = 3;          // Value spent (if known)
+  string address = 4;        // Source address (if known)
+}
+
+// CompactOutput represents a transaction output
+message CompactOutput {
+  uint64 value = 1;          // Output value in satoshis
+  bytes scriptPubKey = 2;    // Output script
+  string address = 3;        // Destination address (if parseable)
+}
+
+// ============================================================================
+// Block Identifiers
+// ============================================================================
+
+message BlockID {
+  uint64 height = 1;
+  bytes hash = 2;
+}
+
+message BlockRange {
+  BlockID start = 1;
+  BlockID end = 2;
+}
+
+message ChainSpec {
+  // Reserved for future chain specification
+}
+
+message Empty {}
+
+// ============================================================================
+// Server Information
+// ============================================================================
+
+message LightdInfo {
+  string version = 1;        // Server version
+  string vendor = 2;         // Server vendor name
+  bool taddrSupport = 3;     // Transparent address support
+  string chainName = 4;      // Network name (main, test, regtest)
+  uint64 blockHeight = 5;    // Current best block height
+  string bestBlockHash = 6;  // Current best block hash
+  uint64 estimatedHeight = 7; // Estimated network height
+}
+
+// ============================================================================
+// Transaction Types
+// ============================================================================
+
+message RawTransaction {
+  bytes data = 1;            // Raw transaction bytes
+  uint64 height = 2;         // Block height (0 if mempool)
+}
+
+message SendResponse {
+  int32 errorCode = 1;       // 0 = success, non-zero = error
+  string errorMessage = 2;   // Error description
+  bytes txHash = 3;          // Transaction hash if successful
+}
+
+message TxFilter {
+  BlockID block = 1;         // Block containing the transaction
+  uint64 index = 2;          // Transaction index in block
+  bytes hash = 3;            // Transaction hash
+}
+
+// ============================================================================
+// Address UTXO Types
+// ============================================================================
+
+message GetAddressUtxosArg {
+  repeated string addresses = 1;  // List of addresses to query
+  uint64 startHeight = 2;         // Minimum block height
+  uint32 maxEntries = 3;          // Maximum number of UTXOs to return
+}
+
+message AddressUtxo {
+  string address = 1;        // Address
+  bytes txid = 2;            // Transaction hash (32 bytes)
+  uint32 index = 3;          // Output index
+  bytes script = 4;          // Output script
+  int64 valueSat = 5;        // Value in satoshis
+  uint64 height = 6;         // Block height (0 if unconfirmed)
+}
+
+message GetAddressUtxosReply {
+  repeated AddressUtxo addressUtxos = 1;
+}
+
+// ============================================================================
+// Balance Types
+// ============================================================================
+
+message GetBalanceArg {
+  string address = 1;
+}
+
+message GetBalanceReply {
+  int64 confirmedBalance = 1;    // Confirmed balance in satoshis
+  int64 pendingBalance = 2;      // Unconfirmed balance in satoshis
+  int64 totalBalance = 3;        // Total balance in satoshis
+}
+
+// ============================================================================
+// Address Stats Types
+// ============================================================================
+
+message GetAddressStatsArg {
+  string address = 1;
+}
+
+message GetAddressStatsReply {
+  uint64 fundedTxoCount = 1;     // Number of funded outputs
+  uint64 fundedTxoSum = 2;       // Sum of funded outputs
+  uint64 spentTxoCount = 3;      // Number of spent outputs
+  uint64 spentTxoSum = 4;        // Sum of spent outputs
+  uint64 txCount = 5;            // Total transaction count
+  int64 balance = 6;             // Current balance
+  uint64 firstSeenTxTime = 7;    // First transaction timestamp
+  uint64 lastSeenTxTime = 8;     // Last transaction timestamp
+}
+
+// ============================================================================
+// Wallet Ranking Types (Junkcoin Extension)
+// ============================================================================
+
+message WalletInfo {
+  string address = 1;            // Wallet address
+  int64 balance = 2;             // Current balance in satoshis
+  uint64 txCount = 3;            // Total transaction count
+  uint64 firstSeenTime = 4;      // First seen timestamp
+  uint64 lastSeenTime = 5;       // Last seen timestamp
+  uint64 rank = 6;               // Rank by balance (1 = highest)
+}
+
+message GetTopWalletsArg {
+  uint32 limit = 1;              // Number of wallets to return (max 1000)
+  uint32 offset = 2;             // Offset for pagination
+  string sortBy = 3;             // Sort by: "balance" (default), "tx_count", "first_seen", "last_seen"
+  bool ascending = 4;            // Sort order: false = descending (default)
+}
+
+message GetTopWalletsReply {
+  repeated WalletInfo wallets = 1;
+  uint64 totalWallets = 2;       // Total number of wallets with balance
+  uint64 totalSupply = 3;        // Total supply in circulation
+}
+
+message GetWalletRankArg {
+  string address = 1;            // Address to get rank for
+}
+
+message GetWalletRankReply {
+  WalletInfo wallet = 1;         // Wallet info with rank
+  uint64 totalWallets = 2;       // Total wallets for context
+  double percentile = 3;         // Percentile (0-100, 100 = richest)
+}
+
+// Rich list snapshot for efficient querying
+message RichListEntry {
+  string address = 1;
+  int64 balance = 2;
+  uint64 rank = 3;
+}
+
+message GetRichListArg {
+  uint32 limit = 1;              // Number of entries (max 10000)
+  uint32 offset = 2;             // Pagination offset
+  int64 minBalance = 3;          // Minimum balance filter (satoshis)
+}
+
+message GetRichListReply {
+  repeated RichListEntry entries = 1;
+  uint64 totalCount = 2;
+  uint64 totalSupply = 3;
+}
+
+// ============================================================================
+// Transaction History Types
+// ============================================================================
+
+message GetTxHistoryArg {
+  string address = 1;
+  uint32 limit = 2;              // Max transactions to return
+  uint32 offset = 3;             // Pagination offset
+  bytes afterTxid = 4;           // Cursor-based pagination
+}
+
+message TxHistoryEntry {
+  bytes txid = 1;
+  uint64 height = 2;             // 0 if unconfirmed
+  uint32 time = 3;               // Block timestamp
+  int64 balanceChange = 4;       // Net balance change for this address
+  uint64 fee = 5;                // Transaction fee
+}
+
+message GetTxHistoryReply {
+  repeated TxHistoryEntry transactions = 1;
+  uint64 totalCount = 2;
+}
+
+// ============================================================================
+// Mempool Types
+// ============================================================================
+
+message MempoolEntry {
+  bytes txid = 1;
+  uint64 fee = 2;
+  uint32 size = 3;
+  uint64 time = 4;               // Entry time
+}
+
+message GetMempoolArg {
+  uint32 limit = 1;
+}
+
+message GetMempoolReply {
+  repeated MempoolEntry entries = 1;
+  uint64 totalCount = 2;
+  uint64 totalSize = 3;
+}
+
+// ============================================================================
+// Supply Info Types
+// ============================================================================
+
+message GetSupplyInfoArg {}
+
+message GetSupplyInfoReply {
+  int64 totalSupply = 1;         // Total supply in satoshis
+  int64 circulatingSupply = 2;   // Circulating supply (excluding locked)
+  uint64 blockHeight = 3;        // Height at which this was calculated
+  string blockHash = 4;          // Block hash at calculation time
+}
+
+// ============================================================================
+// Service Definition
+// ============================================================================
+
+service CompactTxStreamer {
+  // ========== Server Info ==========
+  rpc GetLightdInfo(Empty) returns (LightdInfo);
+  
+  // ========== Block Services ==========
+  rpc GetLatestBlock(ChainSpec) returns (BlockID);
+  rpc GetBlock(BlockID) returns (CompactBlock);
+  rpc GetBlockRange(BlockRange) returns (stream CompactBlock);
+  
+  // ========== Transaction Services ==========
+  rpc GetTransaction(TxFilter) returns (RawTransaction);
+  rpc SendTransaction(RawTransaction) returns (SendResponse);
+  
+  // ========== Address Services ==========
+  rpc GetAddressUtxos(GetAddressUtxosArg) returns (GetAddressUtxosReply);
+  rpc GetAddressUtxosStream(GetAddressUtxosArg) returns (stream AddressUtxo);
+  rpc GetBalance(GetBalanceArg) returns (GetBalanceReply);
+  rpc GetAddressStats(GetAddressStatsArg) returns (GetAddressStatsReply);
+  rpc GetTxHistory(GetTxHistoryArg) returns (GetTxHistoryReply);
+  
+  // ========== Wallet Ranking (Junkcoin Extension) ==========
+  rpc GetTopWallets(GetTopWalletsArg) returns (GetTopWalletsReply);
+  rpc GetWalletRank(GetWalletRankArg) returns (GetWalletRankReply);
+  rpc GetRichList(GetRichListArg) returns (GetRichListReply);
+  
+  // ========== Network Info ==========
+  rpc GetMempool(GetMempoolArg) returns (GetMempoolReply);
+  rpc GetSupplyInfo(GetSupplyInfoArg) returns (GetSupplyInfoReply);
+}

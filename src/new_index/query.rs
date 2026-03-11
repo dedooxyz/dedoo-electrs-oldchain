@@ -19,8 +19,6 @@ use crate::{
     elements::{lookup_asset, AssetRegistry, AssetSorting, LiquidAsset},
 };
 
-const FEE_ESTIMATES_TTL: u64 = 60; // seconds
-
 const CONF_TARGETS: [u16; 28] = [
     1u16, 2u16, 3u16, 4u16, 5u16, 6u16, 7u16, 8u16, 9u16, 10u16, 11u16, 12u16, 13u16, 14u16, 15u16,
     16u16, 17u16, 18u16, 19u16, 20u16, 21u16, 22u16, 23u16, 24u16, 25u16, 144u16, 504u16, 1008u16,
@@ -32,7 +30,7 @@ pub struct Query {
     daemon: Arc<Daemon>,
     config: Arc<Config>,
     cached_estimates: RwLock<(HashMap<u16, f64>, Option<Instant>)>,
-    cached_relayfee: RwLock<Option<f64>>,
+    cached_relayfee: RwLock<Option<(f64, Instant)>>,
     #[cfg(feature = "liquid")]
     asset_db: Option<Arc<RwLock<AssetRegistry>>>,
 }
@@ -264,8 +262,9 @@ impl Query {
         if self.config.network_type.is_regtest() {
             return self.get_relayfee().ok();
         }
+        let ttl = self.config.fee_estimates_cache_ttl;
         if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap() {
-            if cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL) {
+            if cache_time.elapsed() < Duration::from_secs(ttl) {
                 return cache.get(&conf_target).copied();
             }
         }
@@ -280,8 +279,9 @@ impl Query {
     }
 
     pub fn estimate_fee_map(&self) -> HashMap<u16, f64> {
+        let ttl = self.config.fee_estimates_cache_ttl;
         if let (ref cache, Some(cache_time)) = *self.cached_estimates.read().unwrap() {
-            if cache_time.elapsed() < Duration::from_secs(FEE_ESTIMATES_TTL) {
+            if cache_time.elapsed() < Duration::from_secs(ttl) {
                 return cache.clone();
             }
         }
@@ -302,12 +302,19 @@ impl Query {
     }
 
     pub fn get_relayfee(&self) -> Result<f64> {
-        if let Some(cached) = *self.cached_relayfee.read().unwrap() {
+        let ttl = self.config.relay_fee_cache_ttl;
+        if ttl > 0 {
+            if let Some((cached, cache_time)) = *self.cached_relayfee.read().unwrap() {
+                if cache_time.elapsed() < Duration::from_secs(ttl) {
+                    return Ok(cached);
+                }
+            }
+        } else if let Some((cached, _)) = *self.cached_relayfee.read().unwrap() {
             return Ok(cached);
         }
 
         let relayfee = self.daemon.get_relayfee()?;
-        self.cached_relayfee.write().unwrap().replace(relayfee);
+        self.cached_relayfee.write().unwrap().replace((relayfee, Instant::now()));
         Ok(relayfee)
     }
 

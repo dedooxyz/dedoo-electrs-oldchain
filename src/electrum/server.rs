@@ -786,6 +786,8 @@ impl RPC {
 
         let rpc_addr = config.electrum_rpc_addr;
         let txs_limit = config.electrum_txs_limit;
+        let max_connections = config.electrum_max_connections;
+        let channel_buffer_size = config.electrum_channel_buffer_size;
 
         RPC {
             notification: notification.sender(),
@@ -797,8 +799,22 @@ impl RPC {
 
                 let mut threads = HashMap::new();
                 let (garbage_sender, garbage_receiver) = crossbeam_channel::unbounded();
+                let active_connections = Arc::new(Mutex::new(0usize));
 
                 while let Some((stream, addr)) = acceptor.receiver().recv().unwrap() {
+                    // Check connection limit
+                    if max_connections > 0 {
+                        let current = *active_connections.lock().unwrap();
+                        if current >= max_connections {
+                            warn!("[{}] Connection rejected: max connections ({}) reached", addr, max_connections);
+                            let _ = stream.shutdown(Shutdown::Both);
+                            continue;
+                        }
+                    }
+
+                    *active_connections.lock().unwrap() += 1;
+                    let active_connections_clone = active_connections.clone();
+
                     // explicitly scope the shadowed variables for the new thread
                     let query = Arc::clone(&query);
                     let stats = Arc::clone(&stats);
@@ -807,11 +823,11 @@ impl RPC {
                     #[cfg(feature = "electrum-discovery")]
                     let discovery = discovery.clone();
 
-                    let (sender, receiver) = mpsc::sync_channel(10);
+                    let (sender, receiver) = mpsc::sync_channel(channel_buffer_size);
                     senders.lock().unwrap().push(sender.clone());
 
                     let spawned = spawn_thread("peer", move || {
-                        info!("[{}] connected peer", addr);
+                        info!("[{}] connected peer (active: {})", addr, *active_connections_clone.lock().unwrap());
                         let conn = Connection::new(
                             query,
                             stream,
@@ -826,6 +842,7 @@ impl RPC {
                         conn.run(receiver);
                         info!("[{}] disconnected peer", addr);
                         let _ = garbage_sender.send(std::thread::current().id());
+                        *active_connections_clone.lock().unwrap() -= 1;
                     });
 
                     trace!("[{}] spawned {:?}", addr, spawned.thread().id());
