@@ -56,6 +56,39 @@ $ cargo run --release -- -vvv --timestamp --db-dir ./db [--cookie="USER:PASSWORD
 2018-08-17T19:58:29 - INFO - RPC server running on 127.0.0.1:50001
 ```
 
+### Performance Tuning
+
+For high-performance deployments, the following configuration options are available:
+
+| Option | Description | Default | Recommended |
+|--------|-------------|---------|-------------|
+| `--daemon-connection-pool-size` | Daemon RPC connection pool size | 1 | 2-4 |
+| `--db-max-open-files` | RocksDB max open files | 4096 | 8192 |
+| `--db-write-buffer-size` | RocksDB write buffer (MB) | 256 | 512 |
+| `--db-compaction-parallelism` | RocksDB compaction threads | 2 | 4 |
+| `--electrum-max-connections` | Max Electrum client connections | 100 | 200 |
+| `--electrum-channel-buffer-size` | Electrum channel buffer size | 10 | 20 |
+| `--http-worker-threads` | HTTP server worker threads | 4 | 8 |
+| `--mempool-backlog-stats-ttl` | Mempool backlog stats TTL (sec) | 10 | 30 |
+| `--fee-estimates-cache-ttl` | Fee estimates cache TTL (sec) | 60 | 300 |
+| `--relay-fee-cache-ttl` | Relay fee cache TTL (sec) | 60 | 300 |
+
+**Performance Example:**
+```bash
+./dedoo-electrs \
+  --daemon-rpc-addr 127.0.0.1:19772 \
+  --daemon-connection-pool-size 4 \
+  --db-max-open-files 8192 \
+  --db-write-buffer-size 512 \
+  --db-compaction-parallelism 4 \
+  --electrum-max-connections 200 \
+  --electrum-channel-buffer-size 20 \
+  --http-worker-threads 8 \
+  --mempool-backlog-stats-ttl 30 \
+  --fee-estimates-cache-ttl 300 \
+  --relay-fee-cache-ttl 300
+```
+
 The index database is stored here:
 ```bash
 $ du db/

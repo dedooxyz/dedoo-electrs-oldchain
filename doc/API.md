@@ -675,3 +675,56 @@ X-RateLimit-Reset: Time when the rate limit resets (Unix timestamp)
 ## Support
 
 For API support or to report issues, please visit our GitHub repository or contact our support team.
+
+---
+
+## Server Configuration
+
+### CLI Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--network` | Network type (mainnet/testnet) | mainnet |
+| `--daemon-rpc-addr` | Junkcoin RPC address | 127.0.0.1:19771 |
+| `--daemon-dir` | Junkcoin data directory | ~/.junkcoin |
+| `--db-dir` | Index database directory | ./db |
+| `--http-addr` | REST API address | 127.0.0.1:3000 |
+| `--electrum-rpc-addr` | Electrum RPC address | 127.0.0.1:50001 |
+| `--grpc-addr` | gRPC server address | disabled |
+| `--light-mode` | Reduced memory usage | false |
+
+### Performance Tuning Options
+
+| Option | Description | Default | Recommended |
+|--------|-------------|---------|-------------|
+| `--daemon-connection-pool-size` | Daemon RPC connection pool size | 1 | 2-4 |
+| `--db-max-open-files` | RocksDB max open files | 4096 | 8192 |
+| `--db-write-buffer-size` | RocksDB write buffer (MB) | 256 | 512 |
+| `--db-compaction-parallelism` | RocksDB compaction threads | 2 | 4 |
+| `--electrum-max-connections` | Max Electrum client connections | 100 | 200 |
+| `--electrum-channel-buffer-size` | Electrum channel buffer size | 10 | 20 |
+| `--http-worker-threads` | HTTP server worker threads | 4 | 8 |
+| `--mempool-backlog-stats-ttl` | Mempool backlog stats TTL (sec) | 10 | 30 |
+| `--fee-estimates-cache-ttl` | Fee estimates cache TTL (sec) | 60 | 300 |
+| `--relay-fee-cache-ttl` | Relay fee cache TTL (sec) | 60 | 300 |
+
+**Internal Optimizations:**
+- **LRU Cache:** Chain query uses an internal LRU cache (10,000 transactions) to speed up transaction lookups.
+- **Connection Pooling:** Daemon RPC connections are pooled for better concurrency.
+- **Auto-detected gRPC Workers:** gRPC server automatically uses all available CPU cores.
+
+**Performance Example:**
+```bash
+./dedoo-electrs \
+  --daemon-rpc-addr 127.0.0.1:19772 \
+  --daemon-connection-pool-size 4 \
+  --db-max-open-files 8192 \
+  --db-write-buffer-size 512 \
+  --db-compaction-parallelism 4 \
+  --electrum-max-connections 200 \
+  --electrum-channel-buffer-size 20 \
+  --http-worker-threads 8 \
+  --mempool-backlog-stats-ttl 30 \
+  --fee-estimates-cache-ttl 300 \
+  --relay-fee-cache-ttl 300
+```
