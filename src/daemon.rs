@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Lines, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex}; use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use base64::prelude::{Engine, BASE64_STANDARD};
@@ -13,7 +13,7 @@ use itertools::Itertools;
 use serde_json::{from_str, from_value, Value};
 
 #[cfg(not(feature = "liquid"))]
-use bitcoin::consensus::encode::{deserialize, serialize_hex};
+use bitcoin::consensus::encode::{deserialize, deserialize_partial, serialize_hex};
 #[cfg(feature = "liquid")]
 use elements::encode::{deserialize, serialize_hex};
 
@@ -63,7 +63,7 @@ fn header_from_value(value: Value) -> Result<BlockHeader> {
 fn block_from_value(value: Value) -> Result<Block> {
     let block_hex = value.as_str().chain_err(|| "non-string block")?;
     let block_bytes = Vec::from_hex(block_hex).chain_err(|| "non-hex block")?;
-    Ok(deserialize(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))?)
+    Ok(deserialize_partial(&block_bytes).chain_err(|| format!("failed to parse block {}", block_hex))?.0)
 }
 
 fn tx_from_value(value: Value) -> Result<Transaction> {
@@ -312,6 +312,8 @@ impl ConnectionPool {
         self.connections.len()
     }
 }
+
+struct Counter {
     value: Mutex<u64>,
 }
 
@@ -388,7 +390,7 @@ impl Daemon {
         loop {
             let info = daemon.getblockchaininfo()?;
 
-            if !info.initialblockdownload.unwrap_or(false) && info.blocks == info.headers {
+            if info.blocks == info.headers {
                 break;
             }
 

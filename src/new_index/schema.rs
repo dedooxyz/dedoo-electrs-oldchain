@@ -1,4 +1,6 @@
 use bitcoin::hashes::sha256d::Hash as Sha256dHash;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 #[cfg(not(feature = "liquid"))]
 use bitcoin::merkle_tree::MerkleBlock;
 use bitcoin::VarInt;

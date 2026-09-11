@@ -62,6 +62,7 @@ pub struct TxOverview {
 
 impl Mempool {
     pub fn new(chain: Arc<ChainQuery>, metrics: &Metrics, config: Arc<Config>) -> Self {
+        let cfg = config.clone();
         Mempool {
             chain,
             config,
@@ -72,7 +73,7 @@ impl Mempool {
             recent: ArrayDeque::new(),
             backlog_stats: (
                 BacklogStats::default(),
-                Instant::now() - Duration::from_secs(config.mempool_backlog_stats_ttl),
+                Instant::now() - Duration::from_secs(cfg.mempool_backlog_stats_ttl),
             ),
             latency: metrics.histogram_vec(
                 HistogramOpts::new("mempool_latency", "Mempool requests latency (in seconds)"),
