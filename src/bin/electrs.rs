@@ -16,7 +16,7 @@ use dedoo_electrs::{
     errors::*,
     grpc,
     metrics::Metrics,
-    new_index::{precache, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
+    new_index::{precache, supply, ChainQuery, FetchFrom, Indexer, Mempool, Query, Store},
     rest,
     signal::Waiter,
 };
@@ -56,6 +56,8 @@ fn run_server(config: Arc<Config>) -> Result<()> {
         &metrics,
     )?);
     let store = Arc::new(Store::open(&config.db_path.join("newindex"), &config));
+    supply::init(store.history_db());
+    supply::spawn_bootstrap(Arc::clone(&store), Arc::clone(&daemon));
     let mut indexer = Indexer::open(
         Arc::clone(&store),
         fetch_from(&config, &store),

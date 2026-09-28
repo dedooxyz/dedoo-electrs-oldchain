@@ -332,7 +332,7 @@ impl Indexer {
             let _timer = self.start_timer("index_lookup");
             lookup_txos(&self.store.txstore_db, &get_previous_txos(blocks), false)
         };
-        let rows = {
+        let (mut rows, block_supply_nets) = {
             let _timer = self.start_timer("index_process");
             let added_blockhashes = self.store.added_blockhashes.read().unwrap();
             for b in blocks {
@@ -344,6 +344,7 @@ impl Indexer {
             }
             index_blocks(blocks, &previous_txos_map, &self.iconfig)
         };
+        super::supply::apply(&block_supply_nets, &mut rows);
         self.store.history_db.write(rows, self.flush);
     }
 
@@ -1289,20 +1290,34 @@ fn index_blocks(
     block_entries: &[BlockEntry],
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     iconfig: &IndexerConfig,
-) -> Vec<DBRow> {
-    block_entries
+) -> (Vec<DBRow>, Vec<(u32, i64)>) {
+    let per_block: Vec<(Vec<DBRow>, u32, i64)> = block_entries
         .par_iter() // serialization is CPU-intensive
         .map(|b| {
             let mut rows = vec![];
+            let height = b.entry.height() as u32;
+            let mut supply_net: i64 = 0;
             for tx in &b.block.txdata {
-                let height = b.entry.height() as u32;
-                index_transaction(tx, height, previous_txos_map, &mut rows, iconfig);
+                index_transaction(
+                    tx,
+                    height,
+                    previous_txos_map,
+                    &mut rows,
+                    &mut supply_net,
+                    iconfig,
+                );
             }
             rows.push(BlockRow::new_done(full_hash(&b.entry.hash()[..])).into_row()); // mark block as "indexed"
-            rows
+            (rows, height, supply_net)
         })
-        .flatten()
-        .collect()
+        .collect();
+    let mut rows = Vec::new();
+    let mut block_nets = Vec::with_capacity(per_block.len());
+    for (block_rows, height, net) in per_block {
+        rows.extend(block_rows);
+        block_nets.push((height, net));
+    }
+    (rows, block_nets)
 }
 
 // TODO: return an iterator?
@@ -1311,6 +1326,7 @@ fn index_transaction(
     confirmed_height: u32,
     previous_txos_map: &HashMap<OutPoint, TxOut>,
     rows: &mut Vec<DBRow>,
+    supply_net: &mut i64,
     iconfig: &IndexerConfig,
 ) {
     // persist history index:
@@ -1321,6 +1337,10 @@ fn index_transaction(
     let txid = full_hash(&tx.txid()[..]);
     for (txo_index, txo) in tx.output.iter().enumerate() {
         if is_spendable(txo) || iconfig.index_unspendables {
+            if is_spendable(txo) {
+                // UTXO-set semantics: provably unspendable outputs are not counted
+                *supply_net += txo.value.amount_value() as i64;
+            }
             let history = TxHistoryRow::new(
                 &txo.script_pubkey,
                 confirmed_height,
@@ -1346,6 +1366,8 @@ fn index_transaction(
         let prev_txo = previous_txos_map
             .get(&txi.previous_output)
             .unwrap_or_else(|| panic!("missing previous txo {}", txi.previous_output));
+
+        *supply_net -= prev_txo.value.amount_value() as i64;
 
         let history = TxHistoryRow::new(
             &prev_txo.script_pubkey,

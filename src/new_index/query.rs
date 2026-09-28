@@ -319,13 +319,12 @@ impl Query {
     }
 
     pub fn get_total_coin_supply(&self) -> Result<f64> {
-        // Get the total coin supply directly from the daemon
-        // This uses the gettxoutsetinfo RPC call which returns accurate information
-        // about the current UTXO set, including the total amount of coins
-        let txout_set_info = self.daemon.gettxoutsetinfo()?;
-
-        // Return the total amount from the txoutsetinfo
-        Ok(txout_set_info.total_amount)
+        // Maintained incrementally by the indexer (see new_index::supply),
+        // avoiding the very expensive daemon gettxoutsetinfo RPC call per request.
+        match crate::new_index::supply::get() {
+            Some(supply) => Ok(supply as f64 / 1e8),
+            None => bail!("total supply baseline is not ready yet"),
+        }
     }
 
 
